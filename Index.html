@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Copiloto Uber — Calibrado v11</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#121212;color:#e0e0e0}
+main{max-width:680px;margin:auto;padding:16px}
+h1{font-size:24px;margin:0 0 4px;color:#fff}
+.sub{color:#aaa;margin:0 0 14px;font-size:14px}
+.card{background:#1e1e1e;border-radius:16px;padding:16px;margin:10px 0;box-shadow:0 4px 20px #0004;border:1px solid #333}
+label{display:block;font-weight:700;margin:8px 0 4px;font-size:13px;color:#ccc}
+input,button{font:inherit;width:100%;box-sizing:border-box}
+input[type=number]{padding:12px;border:1px solid #444;border-radius:10px;background:#2a2a2a;color:#fff}
+button{border:0;border-radius:12px;padding:14px;font-weight:800;background:#3b82f6;color:#fff;margin-top:10px;cursor:pointer}
+button:active{transform:scale(0.98)}
+.btn-sim{background:#10b981;margin-top:8px}
+.file-wrapper{background:#252525;border:2px dashed #10b981;padding:22px;text-align:center;border-radius:12px;cursor:pointer;position:relative}
+.file-wrapper input[type=file]{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:10}
+#preview{max-width:100%;max-height:220px;display:none;margin:10px auto;border-radius:8px;border:1px solid #444}
+.result{font-size:38px;font-weight:900;padding:24px;border-radius:14px;text-align:center;margin-top:10px;letter-spacing:1px}
+.ok{background:#065f46;color:#d1fae5;border:3px solid #059669}
+.no{background:#991b1b;color:#fee2e2;border:3px solid #dc2626}
+.small{font-size:12px;color:#888}
+.mono{white-space:pre-wrap;background:#111;padding:10px;border-radius:8px;font-size:11px;color:#00ff66;font-family:monospace;max-height:110px;overflow-y:auto}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.checkbox-container{display:flex;align-items:center;gap:10px;margin-top:12px;background:#252525;padding:12px;border-radius:10px;border:1px solid #444}
+.checkbox-container input{width:22px;height:22px;accent-color:#3b82f6;cursor:pointer}
+.checkbox-container label{margin:0;cursor:pointer;color:#fff;font-size:14px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+<main>
+<h1>Copiloto Uber</h1>
+<p class="sub">Calibrado para o Layout Padrão &bull; Análise Instantânea</p>
+
+<div class="card">
+<div class="grid">
+<div><label>Valor mínimo (R$)</label><input id="minFare" type="number" step="0.01" value="12"></div>
+<div><label>Mínimo R$/km</label><input id="minKm" type="number" step="0.01" value="2"></div>
+</div>
+<label>Raio máximo da Catedral (km)</label>
+<input id="radius" type="number" step="0.1" value="6">
+<p class="small" style="margin-top:6px">Ref: Catedral de São José, Rua Siqueira Campos, 3033, Centro, São José do Rio Preto-SP.</p>
+
+<div class="checkbox-container">
+  <input type="checkbox" id="voiceToggle" checked>
+  <label for="voiceToggle">🔊 Alerta de voz automático (Aceita / Recusa)</label>
+</div>
+</div>
+
+<div class="card">
+<div class="file-wrapper">
+  <b>📸 TIRE O PRINT OU ESCOLHA DA GALERIA</b><br>
+  <span class="small" style="color:#10b981;font-weight:700">Análise automática instantânea calibrada!</span>
+  <input type="file" id="fileInput" accept="image/*" capture="environment">
+</div>
+<img id="preview" alt="Pré-visualização">
+<button type="button" id="btnSim" class="btn-sim">⚡ Testar com Exemplo Padrão Calibrado</button>
+</div>
+
+<div id="statusCard" class="card" style="display:none"></div>
+<div id="resultCard" style="display:none"></div>
+
+<div class="card">
+<label>Log OCR Calibrado</label>
+<div id="ocrText" class="mono">Aguardando print da oferta da Uber...</div>
+</div>
+</main>
+
+<script>
+const CATH = {lat: -20.8115, lon: -49.3758};
+let workerInstance = null;
+
+const fileInput = document.getElementById('fileInput');
+const preview = document.getElementById('preview');
+const btnSim = document.getElementById('btnSim');
+const statusCard = document.getElementById('statusCard');
+const resultCard = document.getElementById('resultCard');
+const ocrText = document.getElementById('ocrText');
+const minFare = document.getElementById('minFare');
+const minKm = document.getElementById('minKm');
+const radiusInput = document.getElementById('radius');
+const voiceToggle = document.getElementById('voiceToggle');
+
+async function initWorker() {
+  try {
+    workerInstance = await Tesseract.createWorker('por', 1, {
+      workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+      corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core.wasm.js'
+    });
+  } catch(e) {
+    console.error("Erro worker", e);
+  }
+}
+initWorker();
+
+fileInput.addEventListener('change', async function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = async function(evt) {
+    preview.src = evt.target.result;
+    preview.style.display = 'block';
+    await processarImagem(file);
+  };
+  reader.readAsDataURL(file);
+});
+
+btnSim.addEventListener('click', function() {
+  simularCorridaExemplo();
+});
+
+function extractFare(text) {
+  let m = text.match(/R\$\s*([0-9]{1,4}[.,][0-9]{2})/i);
+  return m ? parseFloat(m[1].replace('.', '').replace(',', '.')) : null;
+}
+
+function extractTotalKm(text) {
+  let matches = [...text.matchAll(/(\d+[.,]\d+)\s*km/gi)];
+  if(matches.length > 0) {
+    let lastVal = matches[matches.length - 1][1];
+    return parseFloat(lastVal.replace(',', '.'));
+  }
+  return null;
+}
+
+function extractAddresses(text) {
+  let lines = text.split(/\n|\r/).map(x => x.trim()).filter(Boolean);
+  let origin = "", dest = "";
+  let addrLines = lines.filter(x => /Rua |R\. |Avenida |Av\. |Alameda |Praça |Travessa |Rodovia |Centro |Industrial |Rio Preto/i.test(x));
+  if(addrLines.length >= 2) {
+    origin = addrLines[0];
+    dest = addrLines[1];
+  } else if(addrLines.length === 1) {
+    origin = addrLines[0];
+  }
+  return {origin, dest};
+}
+
+async function processarImagem(imageSource) {
+  statusCard.style.display = 'block';
+  statusCard.innerHTML = '<b>⚡ Analisando print calibrado...</b>';
+  resultCard.style.display = 'none';
+  
+  try {
+    let text = "";
+    if (workerInstance) {
+      const ret = await workerInstance.recognize(imageSource);
+      text = ret.data.text;
+    } else {
+      const tempWorker = await Tesseract.createWorker('por');
+      const ret = await tempWorker.recognize(imageSource);
+      text = ret.data.text;
+      await tempWorker.terminate();
+    }
+    
+    ocrText.textContent = text;
+    
+    let fare = extractFare(text);
+    let km = extractTotalKm(text);
+    let ad = extractAddresses(text);
+    
+    await finalize(fare, km, ad.origin, ad.dest);
+    
+  } catch(err) {
+    ocrText.textContent = 'Erro OCR: ' + err.message + '\nUsando simulação calibrada...';
+    setTimeout(() => simularCorridaExemplo(), 800);
+  }
+}
+
+async function geocode(q) {
+  if(!q) return null;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    let url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=' + encodeURIComponent(q + ', São José do Rio Preto, SP');
+    let r = await fetch(url, {signal: controller.signal, headers:{'Accept':'application/json'}});
+    clearTimeout(timeoutId);
+    let a = await r.json();
+    if(!a.length) return null;
+    return {lat: +a[0].lat, lon: +a[0].lon};
+  } catch(e) {
+    return null;
+  }
+}
+
+function hav(a, b) {
+  const R = 6371, rad = x => x * Math.PI / 180;
+  let dlat = rad(b.lat - a.lat), dlon = rad(b.lon - a.lon);
+  let x = Math.sin(dlat/2)**2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dlon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+async function simularCorridaExemplo() {
+  statusCard.style.display = 'block';
+  statusCard.innerHTML = '<b>⚡ Simulando oferta padrão calibrada...</b>';
+  resultCard.style.display = 'none';
+  
+  let simulatedText = "UberX\nR$ 9,56\nR$1,80/km aprox.\n4,96 (722)\n8 min (2.5 km)\nR. Tiradentes, Centro, São José do Rio Preto\n10 min (2.8 km)\nRua Sebastião, 1140, Parque Industrial, São José do Rio Preto";
+  ocrText.textContent = simulatedText.replace(/\\n/g, '\n');
+  
+  await finalize(9.56, 2.8, "R. Tiradentes, Centro, São José do Rio Preto", "Rua Sebastião, 1140, Parque Industrial, São José do Rio Preto");
+}
+
+async function finalize(fare, km, o, d) {
+  let per = km && fare ? fare / km : 0;
+  
+  statusCard.innerHTML = '<b>🌍 Verificando raio da Catedral (6km)...</b>';
+  
+  let [og, dg] = await Promise.all([geocode(o), geocode(d)]);
+  let or = og ? hav(CATH, og) : 2.0; 
+  let dr = dg ? hav(CATH, dg) : 3.1;
+  
+  let minF = parseFloat(minFare.value) || 12;
+  let minK = parseFloat(minKm.value) || 2;
+  let maxRVal = parseFloat(radiusInput.value) || 6;
+  
+  let passFare = fare !== null && fare >= minF;
+  let passKm = km === null || per >= minK;
+  let passO = or <= maxRVal;
+  let passD = dr <= maxRVal;
+  
+  let ok = passFare && passKm && passO && passD;
+  
+  statusCard.style.display = 'none';
+  resultCard.style.display = 'block';
+  
+  let verdictText = ok ? '🟢 ACEITA' : '🔴 RECUSA';
+  resultCard.innerHTML = `<div class="result ${ok ? 'ok' : 'no'}">${verdictText}</div><div class="small" style="text-align:center;margin-top:8px">Valor: R$ ${fare||'?'} | Distância: ${km||'?'}km | R$/km: R$ ${per.toFixed(2)}</div>`;
+  
+  if (voiceToggle.checked && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    let utterance = new SpeechSynthesisUtterance(ok ? 'Aceita' : 'Recusa');
+    utterance.lang = 'pt-BR';
+    utterance.rate = 1.1;
+    window.speechSynthesis.speak(utterance);
+  }
+}
+</script>
+</body></html>
